@@ -26,7 +26,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # `hermes_cli` / `hermes_constants` / `gateway` ship with Hermes, and `tools` is Hermes' own
 # package (the plugin's top-level `tools.py` is reached package-relative as
 # `bot_forge.tools`, so a bare `tools` import is always the host's).
-HOST_PROVIDED = {"hermes_cli", "hermes_constants", "tools", "gateway"}
+HOST_PROVIDED = {"hermes_cli", "hermes_constants", "tools", "gateway",
+                 "agent"}  # agent.delegation_context: core's Kanban write fence (ask_agent)
 
 # Import name -> distribution name, for the imports where the two differ.
 IMPORT_TO_DISTRIBUTION = {"yaml": "pyyaml"}

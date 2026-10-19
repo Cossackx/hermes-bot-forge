@@ -384,6 +384,25 @@ def ask_agent(args: dict, **kwargs) -> str:
     # Never forward the caller's process environment to another Bot — it may hold the main profile's
     # whole .env. forge.safe_env is the one allowlist for running another Bot's turn.
     env = forge.safe_env(root)
+    # safe_env already drops HERMES_KANBAN_*, but TASK absence alone would let the asked Bot act as an
+    # orchestrator: a Kanban worker's (or fenced descendant's) write fence must travel with it.
+    try:
+        from agent.delegation_context import DELEGATED_CHILD_ENV_MARKER, delegated_child_subprocess_env
+    except ImportError:
+        return json.dumps({"ok": False, "error": "Cannot safely ask another Bot: Hermes delegation isolation is unavailable."})
+    inherited = os.environ.get(DELEGATED_CHILD_ENV_MARKER, "")
+    env = delegated_child_subprocess_env(env)
+    if DELEGATED_CHILD_ENV_MARKER in env:
+        # An inherited fence (a root path, or "1" = every board) is kept verbatim, never recomputed.
+        fence = env[DELEGATED_CHILD_ENV_MARKER] = inherited or env[DELEGATED_CHILD_ENV_MARKER]
+        # safe_env drops HERMES_KANBAN_DB, which core fences separately from the marker root; if the
+        # parent's pinned board lies outside that root, only the fence-every-board marker covers it.
+        pinned = os.environ.get("HERMES_KANBAN_DB", "").strip()
+        if pinned and fence != "1":
+            try:
+                Path(pinned).expanduser().resolve().relative_to(Path(fence).expanduser().resolve())
+            except (ValueError, OSError):
+                env[DELEGATED_CHILD_ENV_MARKER] = "1"
     try:
         limit = forge.reading_only_args(args.get("reading_only"))
         p = subprocess.run(["hermes", "-p", name, "chat", "-Q", "--max-turns", "30", *limit, "-q", message],
