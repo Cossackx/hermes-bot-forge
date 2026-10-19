@@ -91,6 +91,9 @@ SAFE_ENV_KEYS = (
     # process essentials
     "PATH", "HOME", "LANG", "LC_ALL", "TZ", "TERM", "TMPDIR",
     "SYSTEMROOT", "WINDIR", "PATHEXT", "VIRTUAL_ENV",
+    # Windows home: without it the child `hermes` cannot resolve Path.home() and exits with
+    # "Could not determine home directory" (HOME is the POSIX counterpart, already allowed above).
+    "USERPROFILE",
     # who this machine's account is. The account *name* carries no authority — it is not a
     # credential and not a handle to one — but tools that already hold a login look it up to
     # find that login. Without USER the Claude CLI reported no login at all in this sanitized

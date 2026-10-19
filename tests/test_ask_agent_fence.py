@@ -150,6 +150,10 @@ class AskAgentFence(unittest.TestCase):
         with mock.patch.dict(os.environ, self.base, clear=True):
             self.assertEqual(child, tools.forge.safe_env(self.root))  # exactly the upstream allowlist
 
+    def test_windows_home_reaches_the_child(self):
+        child = self.ask({**self.base, "USERPROFILE": str(self.tmp)})
+        self.assertEqual(child["USERPROFILE"], str(self.tmp))
+
     def test_isolation_import_failure_prevents_spawn(self):
         original = builtins.__import__
 
