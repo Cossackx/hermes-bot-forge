@@ -373,6 +373,35 @@ def delegate_outside(args: dict, settings: dict | None = None, **kwargs) -> str:
     return json.dumps(outside.delegate(spec))
 
 
+def _ask_session_id(stderr) -> str:
+    # Only the CLI's exact exit trailer identifies this invocation; never use the newest session.
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    ids = re.findall(r"^session_id: ([A-Za-z0-9_-]+)\s*$", stderr or "", re.M)
+    return ids[0] if len(set(ids)) == 1 else ""
+
+
+def _ask_saved_reply(root, name, session_id, message) -> str:
+    import contextlib
+    import sqlite3
+
+    home = root if name == "default" else root / "profiles" / name
+    try:
+        with contextlib.closing(sqlite3.connect((home / "state.db").as_uri() + "?mode=ro", uri=True, timeout=2)) as c:
+            session = c.execute("select ended_at, end_reason from sessions where id=?", (session_id,)).fetchone()
+            first = c.execute("select role, content from messages where session_id=? order by id limit 1",
+                              (session_id,)).fetchone()
+            last = c.execute("select role, content, finish_reason, tool_calls from messages "
+                             "where session_id=? order by id desc limit 1", (session_id,)).fetchone()
+        if (session and session[0] is not None and session[1] == "cli_close"
+                and first == ("user", message) and last and last[0] == "assistant"
+                and last[2] == "stop" and not last[3] and isinstance(last[1], str)):
+            return last[1] if last[1].strip() else ""
+    except (OSError, ValueError, sqlite3.Error):
+        pass
+    return ""
+
+
 def ask_agent(args: dict, **kwargs) -> str:
     root = hermes_root()
     name = (args.get("name") or "").strip().lower()
@@ -406,12 +435,26 @@ def ask_agent(args: dict, **kwargs) -> str:
     try:
         limit = forge.reading_only_args(args.get("reading_only"))
         p = subprocess.run(["hermes", "-p", name, "chat", "-Q", "--max-turns", "30", *limit, "-q", message],
-                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=900, env=env)
-    except subprocess.TimeoutExpired:
-        return json.dumps({"ok": False, "error": f"{name} did not answer within 15 min"})
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=900, env=env, cwd=str(Path.home()))
+    except subprocess.TimeoutExpired as exc:
+        return json.dumps({"ok": False, "name": name, "session_id": _ask_session_id(exc.stderr),
+                           "execution_status": "unknown_effect", "error_kind": "timeout",
+                           "error": f"{name} did not answer within 15 min; do not automatically retry"})
     except FileNotFoundError:
         return json.dumps({"ok": False, "error": "hermes CLI not found on PATH"})
-    reply = _clean(p.stdout)
-    if p.returncode != 0 or not reply:
-        return json.dumps({"ok": False, "error": _clean(p.stderr or p.stdout)[-1500:]})
-    return json.dumps({"ok": True, "name": name, "reply": reply[-6000:]})
+    session_id = _ask_session_id(p.stderr)
+    result = {"name": name, "session_id": session_id}
+    if p.returncode != 0:
+        return json.dumps({**result, "ok": False, "execution_status": "failed", "error_kind": "worker_failure",
+                           "error": _clean(p.stderr or p.stdout)[-1500:] or f"hermes exited {p.returncode}"})
+    reply = p.stdout.strip()
+    recovered = False
+    if not reply and session_id:
+        reply = _ask_saved_reply(root, name, session_id, message)
+        recovered = bool(reply)
+    if not reply:
+        return json.dumps({**result, "ok": False, "execution_status": "unknown_effect", "error_kind": "output_failure",
+                           "error": "No reply received or verified in this session; do not automatically retry"})
+    return json.dumps({**result, "ok": True, "execution_status": "completed", "reply": reply,
+                       "reply_source": "session" if recovered else "stdout"})
