@@ -36,6 +36,14 @@ provides_hooks:
   - pre_llm_call
   - post_llm_call
 config_schema:
+  ask_timeout_seconds:
+    type: int
+    default: 1800
+    description: >-
+      Finite wait for an asked Bot (1–3600 seconds). Keep the caller's
+      timeouts.tools.sequential_call and timeouts.tools.concurrent_batch above this
+      value with return/cleanup margin. The target profile's agent.max_turns controls
+      its turn budget; ask_agent no longer overrides it.
   inherit_model:
     type: bool
     default: true

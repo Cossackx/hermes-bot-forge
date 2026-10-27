@@ -7,7 +7,7 @@ from . import schemas, tools
 _SETTINGS = ("inherit_model", "fallback_model", "probe_local_models", "install_gateway",
              "allow_delete", "backup_before_delete", "suggest_connectors", "allow_secrets",
              "journal_enabled", "enforce_approvals", "ack_reactions", "ack_tapback", "workspace_survey",
-             "workspace_roots", "notify_email", "notify_blocked", "adopt_bots")
+             "workspace_roots", "notify_email", "notify_blocked", "adopt_bots", "ask_timeout_seconds")
 
 
 def register(ctx):
@@ -32,7 +32,7 @@ def register(ctx):
                       emoji="📓",
                       description="Enable, write, or read a Bot's factual work journal")
     ctx.register_tool(name="ask_agent", toolset="bot_forge", schema=schemas.ASK_AGENT,
-                      handler=tools.ask_agent, emoji="📨",
+                      handler=lambda args, **kw: tools.ask_agent(args, settings=settings(), **kw), emoji="📨",
                       description="Ask another Hermes Bot something and return its reply")
     ctx.register_tool(name="request_takeover", toolset="bot_forge", schema=schemas.REQUEST_TAKEOVER,
                       handler=lambda args, **kw: tools.request_takeover(args, settings=settings(), **kw),

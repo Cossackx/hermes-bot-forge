@@ -402,7 +402,7 @@ def _ask_saved_reply(root, name, session_id, message) -> str:
     return ""
 
 
-def ask_agent(args: dict, **kwargs) -> str:
+def ask_agent(args: dict, settings: dict | None = None, **kwargs) -> str:
     root = hermes_root()
     name = (args.get("name") or "").strip().lower()
     message = (args.get("message") or "").strip()
@@ -410,6 +410,12 @@ def ask_agent(args: dict, **kwargs) -> str:
         return json.dumps({"ok": False, "error": "need a valid profile name and a message"})
     if name != "default" and not (root / "profiles" / name / "config.yaml").exists():
         return json.dumps({"ok": False, "error": f"no Bot named '{name}' (see list_agents)"})
+    timeout = (settings or {}).get("ask_timeout_seconds")
+    if timeout is None:
+        timeout = 1800
+    if type(timeout) is not int or not 1 <= timeout <= 3600:
+        return json.dumps({"ok": False, "error_kind": "invalid_configuration",
+                           "error": "ask_timeout_seconds must be an integer from 1 to 3600"})
     # Never forward the caller's process environment to another Bot — it may hold the main profile's
     # whole .env. forge.safe_env is the one allowlist for running another Bot's turn.
     env = forge.safe_env(root)
@@ -434,13 +440,14 @@ def ask_agent(args: dict, **kwargs) -> str:
                 env[DELEGATED_CHILD_ENV_MARKER] = "1"
     try:
         limit = forge.reading_only_args(args.get("reading_only"))
-        p = subprocess.run(["hermes", "-p", name, "chat", "-Q", "--max-turns", "30", *limit, "-q", message],
+        # Let the target profile's agent.max_turns govern its run; no hidden CLI cap.
+        p = subprocess.run(["hermes", "-p", name, "chat", "-Q", *limit, "-q", message],
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           stdin=subprocess.DEVNULL, timeout=900, env=env, cwd=str(Path.home()))
+                           stdin=subprocess.DEVNULL, timeout=timeout, env=env, cwd=str(Path.home()))
     except subprocess.TimeoutExpired as exc:
         return json.dumps({"ok": False, "name": name, "session_id": _ask_session_id(exc.stderr),
                            "execution_status": "unknown_effect", "error_kind": "timeout",
-                           "error": f"{name} did not answer within 15 min; do not automatically retry"})
+                           "error": f"{name} did not answer within {timeout} seconds; do not automatically retry"})
     except FileNotFoundError:
         return json.dumps({"ok": False, "error": "hermes CLI not found on PATH"})
     session_id = _ask_session_id(p.stderr)
