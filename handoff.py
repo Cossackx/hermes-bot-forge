@@ -267,9 +267,10 @@ def handoff(s: dict, now: datetime | None = None) -> dict:
     # Written before the turn runs, so a crash mid-turn still leaves the user a record of what went where.
     path = _write_record(pdir, record)
 
+    turn = {}
     try:
         ok, reply = forge.bot_chat(root, to, message, max_turns=MAX_TURNS, timeout=CHAT_TIMEOUT,
-                               env=forge.safe_env(root), reading_only=reading_only)
+                               env=forge.safe_env(root), reading_only=reading_only, detail=turn)
     except Exception as exc:  # the CLI missing, a timeout — the record stays, marked as undelivered
         record.update({"status": "failed", "error": str(exc)[:300]})
         _write_record(pdir, record)
@@ -283,7 +284,10 @@ def handoff(s: dict, now: datetime | None = None) -> dict:
 
     state = outcome(reply)
     finished = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    record.update({"status": state, "finished": finished, "reply": reply[-REPLY_KEEP:]})
+    record.update({"status": state, "finished": finished, "reply": reply[-REPLY_KEEP:],
+                   "session": turn.get("session", "bot-chat")})
+    if turn.get("resume_refused"):
+        record["resume_refused"] = turn["resume_refused"]
     _write_record(pdir, record)
 
     # Both sides remember it. The receiver's entry is the one that counts as "waiting on you" when it
@@ -308,9 +312,11 @@ def handoff(s: dict, now: datetime | None = None) -> dict:
             "scheduled": f"{to_display} scheduled it rather than doing it now.",
             "replied": f"{to_display} replied without a clear end state — read the reply.",
             "sent": f"{to_display} took it but said nothing back."}[state]
+    if turn.get("session") == "fresh":
+        note += " (The turn ran in a fresh session of that Bot, not its Bot Chat.)"
     return {"ok": True, "id": handoff_id, "from": sender, "to": to, "to_display": to_display,
             "status": state, "icon": ICONS[state], "owner": to, "reply": reply[-REPLY_KEEP:],
-            "journal": journaled, "record": str(path),
+            "journal": journaled, "record": str(path), "session": turn.get("session", "bot-chat"),
             "note": note + " Do not redo the work yourself; report the outcome."}
 
 

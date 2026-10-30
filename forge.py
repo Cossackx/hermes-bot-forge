@@ -637,31 +637,54 @@ def newest_session(root, profile_id: str) -> str:
         return ""
 
 
+RESUME_REFUSED = "Resume retains gateway session policy"  # Hermes core's refusal prefix, verbatim
+
+
+def resume_refused(p) -> bool:
+    """True when Hermes refused to resume the Bot Chat because a launch flag differs from its frozen policy."""
+    return p.returncode != 0 and RESUME_REFUSED in ((p.stderr or "") + (p.stdout or ""))
+
+
+def _fresh_session_argv(profile_id, source, reading_only, message):
+    """A one-off session of the profile: never resumes, so every creation flag is honoured."""
+    stamp = ["--source", source] if source and source != "cli" else []
+    return ["-p", profile_id, "chat", *stamp, "-Q", *reading_only_args(reading_only), "-q", message]
+
+
 def bot_chat(root, profile_id, message, source: str = "", max_turns: int = 3, timeout: int = CHAT_TIMEOUT,
-             env: dict | None = None, reading_only: bool = False):
+             env: dict | None = None, reading_only: bool = False, detail: dict | None = None):
     """Send a message in the Bot's canonical Bot Chat (created on first use).
 
     The source stamped here is permanent, and Hermes decides a session's client surface from it
     (`tui_gateway/server.py::_gui_surface_toolsets`): a chat stamped `cli` never gets the desktop
     toolset, so a Bot whose canonical chat we created could not react to a message in Desktop. On a
-    Bot-Mode install this chat belongs to the Desktop roster, so stamp it the way Desktop would."""
+    Bot-Mode install this chat belongs to the Desktop roster, so stamp it the way Desktop would.
+
+    Resuming is policy-frozen: Hermes refuses any creation flag (`--max-turns`, `-t`, `-m`, ...) that
+    differs from the chat's launch, so the resume path passes none. The target profile's own
+    `agent.max_turns` governs the turn (`max_turns` is kept in the signature for callers). A turn that
+    needs such a flag (`reading_only` needs `-t`), or a resume Hermes still refuses, runs in a fresh
+    session of that profile instead; `detail`, when given, records `{"session": "bot-chat"|"fresh",
+    "resume_refused": <message or None>}` so the caller can say where the reply came from."""
     source = source or ("desktop" if bot_mode_install(Path(root)) else "cli")
     existing = has_bot_chat(root, profile_id)
-    # No `--max-turns` on either branch (local fix, 2026-10-30): Hermes refuses creation overrides
-    # when resuming an existing Bot Chat ("Resume retains gateway session policy ... --max-turns
-    # differs from this session's launch"), which failed every handoff after the first. The target
-    # profile's agent.max_turns governs its run, as ask_agent already does. `max_turns` stays in the
-    # signature for callers.
+    info = detail if detail is not None else {}
+    info.update({"session": "bot-chat", "resume_refused": None})
     if existing and reading_only:
-        # `-t` is a creation override too, so a reading-only turn cannot resume the Bot Chat either.
-        # Run it in a fresh session of that profile instead: the toolset restriction stays enforced by
-        # Hermes, at the cost of the turn not appearing in the canonical Bot Chat.
-        p = run(root, "-p", profile_id, "chat", "--source", source, "-Q",
-                *reading_only_args(reading_only), "-q", message, timeout=timeout, check=False, env=env)
+        info["session"] = "fresh"
+        p = run(root, *_fresh_session_argv(profile_id, source, reading_only, message),
+                timeout=timeout, check=False, env=env)
     elif existing or source == "cli":
         p = run(root, "-p", profile_id, "chat", "-c", BOT_CHAT_TITLE, "--create-if-missing", "-Q",
                 *reading_only_args(reading_only), "-q", message,
                 timeout=timeout, check=False, env=env)
+        if resume_refused(p):
+            # A future core policy key, or a Bot Chat launched with different flags, must not fail the
+            # handoff: run the turn once more outside the canonical chat and say so.
+            info["resume_refused"] = clean(p.stderr or p.stdout)[-300:]
+            info["session"] = "fresh"
+            p = run(root, *_fresh_session_argv(profile_id, source, reading_only, message),
+                    timeout=timeout, check=False, env=env)
     else:
         # `chat -c <title> --create-if-missing` hardcodes source="cli" (hermes_cli/main.py), and a session's
         # stored source is what decides its client surface — a cli-stamped chat never gets the desktop
