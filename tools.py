@@ -455,11 +455,13 @@ def ask_agent(args: dict, settings: dict | None = None, **kwargs) -> str:
     if p.returncode != 0:
         return json.dumps({**result, "ok": False, "execution_status": "failed", "error_kind": "worker_failure",
                            "error": _clean(p.stderr or p.stdout)[-1500:] or f"hermes exited {p.returncode}"})
-    reply = p.stdout.strip()
-    recovered = False
-    if not reply and session_id:
-        reply = _ask_saved_reply(root, name, session_id, message)
-        recovered = bool(reply)
+    # Prefer the specialist's validated final message: quiet-mode stdout can carry tool previews
+    # (e.g. coloured patch diffs) ahead of the answer. Fall back to stdout only when no saved reply
+    # for this exact invocation validates.
+    reply = _ask_saved_reply(root, name, session_id, message) if session_id else ""
+    recovered = bool(reply)
+    if not reply:
+        reply = p.stdout.strip()
     if not reply:
         return json.dumps({**result, "ok": False, "execution_status": "unknown_effect", "error_kind": "output_failure",
                            "error": "No reply received or verified in this session; do not automatically retry"})

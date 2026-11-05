@@ -50,9 +50,28 @@ class AskAgentReply(unittest.TestCase):
         self.assertEqual(out["session_id"], "20261022_204553_4ec43b")
         self.assertEqual(out["reply_source"], "session")
 
-    def test_normal_stdout_is_not_filtered_or_truncated(self):
+    def test_stdout_fallback_is_not_filtered_or_truncated(self):
+        # With no validated saved reply for this invocation, stdout is the reply, verbatim.
         reply = "hermes update is just quoted text\n" + "x" * 7000
-        self.assertEqual(self.ask(stdout=reply + "\n")["reply"], reply)
+        out = self.ask(stdout=reply + "\n", stderr="session_id: missing\n")
+        self.assertEqual(out["reply"], reply)
+        self.assertEqual(out["reply_source"], "stdout")
+
+    def test_saved_final_reply_beats_stdout_tool_previews(self):
+        # Quiet-mode stdout can be dominated by coloured patch previews; the saved final
+        # assistant message for this exact session is the specialist's actual answer.
+        preview = "\x1b[2m\u2502\x1b[0m @@ -1,3 +1,4 @@\n\x1b[32m+ added line\x1b[0m\n" * 400
+        out = self.ask(stdout=preview + "saved — café ✓\n")
+        self.assertTrue(out["ok"], out)
+        self.assertEqual(out["reply"], "saved — café ✓")
+        self.assertEqual(out["reply_source"], "session")
+
+    def test_unvalidated_saved_reply_falls_back_to_stdout(self):
+        with closing(sqlite3.connect(self.db)) as c, c:
+            c.execute("update sessions set end_reason='interrupted'")
+        out = self.ask(stdout="answer from stdout\n")
+        self.assertEqual(out["reply"], "answer from stdout")
+        self.assertEqual(out["reply_source"], "stdout")
 
     def test_real_worker_failure_does_not_promote_saved_text(self):
         out = self.ask(rc=1, stderr="provider failed\nsession_id: 20261022_204553_4ec43b\n")
